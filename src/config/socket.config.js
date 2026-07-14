@@ -8,23 +8,34 @@ exports.setupSocket = (server) => {
       methods: ['GET', 'POST'],
       credentials: true,
     },
+    pingTimeout: 60000,
+    transports: ['websocket', 'polling'],
   });
 
   io.on('connection', (socket) => {
     console.log(`[SOCKET] User connected: ${socket.id}`);
 
     socket.on('joinPoll', (pollCode) => {
+      if (!pollCode || typeof pollCode !== 'string') {
+        socket.emit('error', { message: 'Invalid poll code' });
+        return;
+      }
       socket.join(`poll_${pollCode}`);
       console.log(`[SOCKET] User ${socket.id} joined poll: ${pollCode}`);
     });
 
     socket.on('leavePoll', (pollCode) => {
+      if (!pollCode || typeof pollCode !== 'string') return;
       socket.leave(`poll_${pollCode}`);
       console.log(`[SOCKET] User ${socket.id} left poll: ${pollCode}`);
     });
 
     socket.on('disconnect', () => {
       console.log(`[SOCKET] User disconnected: ${socket.id}`);
+    });
+
+    socket.on('error', (error) => {
+      console.error(`[SOCKET] Error for ${socket.id}:`, error);
     });
   });
 

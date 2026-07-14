@@ -1,51 +1,60 @@
-/**
- * Express Application Setup
- * -------------------------
- * Handles:
- *  - Core Express app initialization
- *  - Global middleware registration
- *  - Security & CORS configuration
- *  - API route mounting
- *  - Centralized 404 & error handling
- */
-
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
 
 const appConfig = require('./config/app.config');
 const pollRoutes = require('./routes/poll.routes');
 
 const app = express();
 
-/* ===========================
-   GLOBAL MIDDLEWARES
-   =========================== */
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: {
+    success: false,
+    message: 'Too many requests, please try again later.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(limiter);
 
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
-
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
 if (appConfig.NODE_ENV !== 'development') {
   app.use(
     helmet({
       crossOriginResourcePolicy: false,
+      contentSecurityPolicy: false,
     })
   );
 }
 
-app.use(
-  cors({
-    origin: appConfig.FRONTEND_URL,
-    credentials: true,
-  })
-);
+const corsOptions = {
+  origin: (origin, callback) => {
+    const allowedOrigins = [
+      appConfig.FRONTEND_URL,
+      'http://localhost:5173',
+      'http://localhost:3000',
+    ];
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  maxAge: 86400,
+};
 
-/* ===========================
-   ROOT & HEALTH ROUTES
-   =========================== */
+app.use(cors(corsOptions));
 
 app.get('/', (req, res) => {
   res.status(200).json({
@@ -57,23 +66,22 @@ app.get('/', (req, res) => {
       frontend: 'https://github.com/sohaibalidev/pollverse-client',
     },
     live: {
-      frontend: 'https://pollverse.netlify.app',
-      backend: 'https://pollverse-server.onrender.com',
+      frontend: appConfig.FRONTEND_URL,
+      backend: appConfig.BASE_URL,
     },
-    author: 'Muhammad Sohaib Ali',
-    status: 'online',
+    timestamp: new Date().toISOString(),
   });
 });
 
-/* ===========================
-   API ROUTES
-   =========================== */
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  });
+});
 
 app.use('/api', pollRoutes);
-
-/* ===========================
-   404 HANDLER
-   =========================== */
 
 app.use((req, res) => {
   res.status(404).json({
@@ -81,10 +89,6 @@ app.use((req, res) => {
     message: `Route ${req.originalUrl} not found`,
   });
 });
-
-/* ===========================
-   GLOBAL ERROR HANDLER
-   =========================== */
 
 app.use((err, req, res, next) => {
   if (appConfig.NODE_ENV === 'development') console.error('Error:', err);

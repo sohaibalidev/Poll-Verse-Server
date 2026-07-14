@@ -27,7 +27,6 @@ function getOrCreateDeviceId(req, res) {
   if (!deviceId) {
     deviceId = generateDeviceId();
     setDeviceIdCookie(res, deviceId);
-
     console.log('Generated new Device ID:', deviceId);
   }
 

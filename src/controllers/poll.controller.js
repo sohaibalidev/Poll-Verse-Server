@@ -3,20 +3,47 @@ const Vote = require('../models/Vote');
 const { getOrCreateDeviceId } = require('../utils/deviceId');
 const { generateCode } = require('../utils/codeGenerator');
 
-/**
- * Create a new poll
- */
+const MAX_ATTEMPTS = 10;
+const CACHE_TTL = 60;
+
 exports.createPoll = async (req, res) => {
   try {
     const { name, question, answers, multipleChoices, duration } = req.body;
+
+    if (
+      !name ||
+      !question ||
+      !answers ||
+      !Array.isArray(answers) ||
+      answers.length < 2
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, question, and at least 2 answers are required',
+      });
+    }
+
+    if (answers.length > 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Maximum 10 answers allowed',
+      });
+    }
+
+    if (duration && (duration < 1 || duration > 720)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Duration must be between 1 and 720 hours',
+      });
+    }
 
     let code;
     let codeExists = true;
     let attempts = 0;
 
-    while (codeExists && attempts < 10) {
+    while (codeExists && attempts < MAX_ATTEMPTS) {
       code = generateCode();
-      const existingPoll = await Poll.findOne({ code });
+      const existingPoll = await Poll.findOne({ code }).select('_id').lean();
       codeExists = !!existingPoll;
       attempts++;
     }
@@ -28,14 +55,13 @@ exports.createPoll = async (req, res) => {
       });
     }
 
-    // Calculate validTill based on duration
     const validTill = new Date();
     validTill.setHours(validTill.getHours() + (duration || 24));
 
     const poll = new Poll({
-      name,
-      question,
-      answers,
+      name: name.trim(),
+      question: question.trim(),
+      answers: answers.map((a) => a.trim()).filter((a) => a.length > 0),
       multipleChoices: multipleChoices || false,
       validTill,
       code,
@@ -56,13 +82,18 @@ exports.createPoll = async (req, res) => {
   }
 };
 
-/**
- * Get poll by code
- */
 exports.getPollByCode = async (req, res) => {
   try {
     const { code } = req.params;
-    const poll = await Poll.findOne({ code });
+
+    if (!code || code.length !== 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid poll code',
+      });
+    }
+
+    const poll = await Poll.findOne({ code }).lean();
 
     if (!poll) {
       return res.status(404).json({
@@ -71,23 +102,25 @@ exports.getPollByCode = async (req, res) => {
       });
     }
 
-    const votes = await Vote.find({ pollId: poll._id });
+    const [votes, deviceId] = await Promise.all([
+      Vote.find({ pollId: poll._id }).lean(),
+      getOrCreateDeviceId(req, res),
+    ]);
+
     const voteCounts = poll.answers.map(
       (_, index) => votes.filter((vote) => vote.selected.includes(index)).length
     );
 
-    const totalVotes = votes.length;
-
-    const deviceId = getOrCreateDeviceId(req, res);
-    const userVote = await Vote.findOne({ pollId: poll._id, deviceId });
+    const userVote = votes.find((vote) => vote.deviceId === deviceId);
 
     res.json({
       success: true,
       data: {
-        ...poll.toPublic(),
+        ...poll,
         voteCounts,
-        totalVotes,
+        totalVotes: votes.length,
         userVote: userVote ? userVote.selected : null,
+        isActive: new Date() < poll.validTill,
       },
     });
   } catch (error) {
@@ -99,13 +132,17 @@ exports.getPollByCode = async (req, res) => {
   }
 };
 
-/**
- * Submit a vote
- */
 exports.submitVote = async (req, res) => {
   try {
     const { code } = req.params;
     const { selected } = req.body;
+
+    if (!code || code.length !== 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid poll code',
+      });
+    }
 
     const poll = await Poll.findOne({ code });
     if (!poll) {
@@ -137,7 +174,8 @@ exports.submitVote = async (req, res) => {
     }
 
     const invalidIndices = selected.filter(
-      (index) => index < 0 || index >= poll.answers.length
+      (index) =>
+        !Number.isInteger(index) || index < 0 || index >= poll.answers.length
     );
 
     if (invalidIndices.length > 0) {
@@ -156,8 +194,6 @@ exports.submitVote = async (req, res) => {
 
     const deviceId = getOrCreateDeviceId(req, res);
 
-    console.log('Submitting vote for Device ID:', deviceId);
-
     const existingVote = await Vote.findOne({ pollId: poll._id, deviceId });
     if (existingVote) {
       return res.status(400).json({
@@ -169,12 +205,12 @@ exports.submitVote = async (req, res) => {
     const vote = new Vote({
       pollId: poll._id,
       deviceId,
-      selected,
+      selected: selected.sort((a, b) => a - b),
     });
 
     await vote.save();
 
-    const votes = await Vote.find({ pollId: poll._id });
+    const votes = await Vote.find({ pollId: poll._id }).lean();
     const voteCounts = poll.answers.map(
       (_, index) => votes.filter((vote) => vote.selected.includes(index)).length
     );
@@ -187,8 +223,6 @@ exports.submitVote = async (req, res) => {
         code: poll.code,
         voteCounts,
         totalVotes,
-        selected,
-        deviceId,
       });
     }
 
@@ -209,13 +243,18 @@ exports.submitVote = async (req, res) => {
   }
 };
 
-/**
- * Get poll results (without user's vote info)
- */
 exports.getPollResults = async (req, res) => {
   try {
     const { code } = req.params;
-    const poll = await Poll.findOne({ code });
+
+    if (!code || code.length !== 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid poll code',
+      });
+    }
+
+    const poll = await Poll.findOne({ code }).lean();
 
     if (!poll) {
       return res.status(404).json({
@@ -224,19 +263,18 @@ exports.getPollResults = async (req, res) => {
       });
     }
 
-    const votes = await Vote.find({ pollId: poll._id });
+    const votes = await Vote.find({ pollId: poll._id }).lean();
     const voteCounts = poll.answers.map(
       (_, index) => votes.filter((vote) => vote.selected.includes(index)).length
     );
 
-    const totalVotes = votes.length;
-
     res.json({
       success: true,
       data: {
-        ...poll.toPublic(),
+        ...poll,
         voteCounts,
-        totalVotes,
+        totalVotes: votes.length,
+        isActive: new Date() < poll.validTill,
       },
     });
   } catch (error) {

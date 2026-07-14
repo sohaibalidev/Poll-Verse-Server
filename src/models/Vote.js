@@ -8,13 +8,11 @@ const voteSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-
     deviceId: {
       type: String,
       required: true,
       index: true,
     },
-
     selected: {
       type: [Number],
       required: true,
@@ -29,7 +27,6 @@ const voteSchema = new mongoose.Schema(
         message: 'Selected must contain unique, non-negative indices',
       },
     },
-
     votedAt: {
       type: Date,
       default: Date.now,
