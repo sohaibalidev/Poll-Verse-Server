@@ -10,8 +10,8 @@ module.exports = {
   APP_NAME: process.env.APP_NAME || 'PollVerse',
   PORT: process.env.PORT || 3000,
 
-  BASE_URL: process.env.BASE_URL || 'http://192.168.100.4:3000',
-  FRONTEND_URL: process.env.FRONTEND_URL || 'http://192.168.100.4:5173',
+  BASE_URL: process.env.BASE_URL || 'http://localhost:3000',
+  FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5173',
 
   NODE_ENV: process.env.NODE_ENV || 'development',
 
